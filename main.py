@@ -3,7 +3,7 @@ import requests
 from fastapi.responses import JSONResponse
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 import os
 
@@ -118,6 +118,69 @@ async def calculate_sales_per_day_month_and_year(month: int, day: int):
     except Exception as e:
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
 
+
+@app.get("/product/{month}/{day}")
+async def calculate_sales_per_day_month_and_year(month: int, day: int):
+    try:
+        data = load_data()
+        totals = defaultdict(float)
+
+        # Variables pour stocker les ventes précédentes
+        previous_day_total = 0
+        previous_month_total = 0
+
+        # Calcul des ventes pour le jour demandé et des totaux précédents
+        for row in data:
+            close_date = None
+
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date:
+                year = close_date.year
+
+                # Total des ventes pour le jour demandé
+                if close_date.month == month and close_date.day == day:
+                    totals[(year, month, day)] += float(row.get("close_value", 0))
+
+                # Total des ventes pour le jour précédent
+                if close_date.month == month and close_date.day == day - 1:
+                    previous_day_total += float(row.get("close_value", 0))
+                    print(previous_day_total)
+
+                # Total des ventes pour le mois précédent
+                if close_date.month == month - 1 and close_date.day == day:
+                    previous_month_total += float(row.get("close_value", 0))
+
+        # Préparer les résultats sous forme de liste de dictionnaires
+        result = [{"year": year, "month": month, "day": day, "total_sales": total}
+                  for (year, month, day), total in totals.items()]
+
+        # Calcul des pourcentages d'évolution
+        percentage_change_day = None
+        percentage_change_month = None
+
+        current_day_total = totals.get((year, month, day), 0)
+
+        if previous_day_total > 0:
+            percentage_change_day = ((current_day_total - previous_day_total) / previous_day_total) * 100
+
+        if previous_month_total > 0:
+            percentage_change_month = ((current_day_total - previous_month_total) / previous_month_total) * 100
+
+        return {
+            "data": result,
+            "percentage_change_day": round(percentage_change_day, 2) if percentage_change_day is not None else None,
+            "percentage_change_month": round(percentage_change_month, 2) if percentage_change_month is not None else None,
+        }
+
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"message": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
 
 
 @app.get("/sales/conversion_rate/{month}/{day}")
@@ -304,3 +367,326 @@ async def get_sales_percentage_by_region(month: int):
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
+###############################################################
+
+@app.get("/deals/{day}/{month}")
+async def get_deals_by_day(day: int, month: int):
+    try:
+        data = load_data()
+        lost_deals = 0
+        won_deals = 0
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date:
+                if close_date.month == month and close_date.day == day:
+                    if row["deal_stage"] == "Lost":
+                        print("Lost")
+                        lost_deals += 1
+                    elif row["deal_stage"] == "Won":
+                        won_deals += 1
+
+        return{
+            "lost_deals": lost_deals,
+            "won_deals": won_deals,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+@app.get("/deals/{month}")
+async def get_deals_by_month(month: int):
+    try:
+        data = load_data()
+        daily_deals = defaultdict(lambda: {"lost": 0, "won": 0})
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                day = close_date.day
+                if row.get("deal_stage") == "Lost":
+                    daily_deals[day]["lost"] += 1
+                elif row.get("deal_stage") == "Won":
+                    daily_deals[day]["won"] += 1
+
+        result = [
+            {"day": day, "lost_deals": deals["lost"], "won_deals": deals["won"]}
+            for day, deals in sorted(daily_deals.items())
+        ]
+
+        return {"month": month, "daily_deals": result}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+
+@app.get("/agents/{month}")
+async def get_sales_by_month(month: int):
+    try:
+        data = load_data()
+        agent_stats = defaultdict(lambda: {"won_deals": 0, "total_deals": 0, "total_sales": 0.0})
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                agent_name = row.get("sales_agent (from sales_agent)")
+                if isinstance(agent_name, list):
+                    agent_name = agent_name[0]
+                deal_stage = row.get("deal_stage")
+                close_value = float(row.get("close_value", 0))
+
+                agent_stats[agent_name]["total_deals"] += 1
+                agent_stats[agent_name]["total_sales"] += close_value
+
+                if deal_stage == "Won":
+                    agent_stats[agent_name]["won_deals"] += 1
+
+        result = [
+            {
+                "agent_name": agent,
+                "won_deals": stats["won_deals"],
+                "success_rate": round((stats["won_deals"] / stats["total_deals"] * 100), 2) if stats["total_deals"] > 0 else 0.0,
+                "total_sales": round(stats["total_sales"], 2)
+            }
+            for agent, stats in agent_stats.items()
+        ]
+
+        return {"month": month, "agent_stats": result}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+
+@app.get("/top-agent/{month}")
+async def get_top_agent_by_month(month: int):
+    try:
+        data = load_data()
+        agent_sales = defaultdict(float)
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                agent_name = row.get("sales_agent (from sales_agent)")
+                if isinstance(agent_name, list):
+                    agent_name = agent_name[0]
+                close_value = float(row.get("close_value", 0))
+                agent_sales[agent_name] += close_value
+
+        if not agent_sales:
+            return {"month": month, "top_agent": None}
+
+        top_agent = max(agent_sales, key=agent_sales.get)
+        return {
+            "month": month,
+            "top_agent": {
+                "agent_name": top_agent,
+                "total_sales": round(agent_sales[top_agent], 2)
+            }
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.get("/top-product/{month}")
+async def get_top_product_by_month(month: int):
+    try:
+        data = load_data()
+        product_sales = defaultdict(int)
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                product_name = row.get("product (from product)")
+                if isinstance(product_name, list):
+                    product_name = product_name[0]
+                product_sales[product_name] += 1
+
+        if not product_sales:
+            return {"month": month, "top_product": None}
+
+        top_product = max(product_sales, key=product_sales.get)
+        return {
+            "month": month,
+            "top_product": {
+                "product_name": top_product,
+                "units_sold": product_sales[top_product]
+            }
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.get("/top-customer/{month}")
+async def get_top_customer_by_month(month: int):
+    try:
+        data = load_data()
+        customer_stats = defaultdict(lambda: {"purchase_count": 0, "total_spent": 0.0})
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                customer_name = row.get("customer_name")
+                if isinstance(customer_name, list):
+                    customer_name = customer_name[0]
+                close_value = float(row.get("close_value", 0))
+
+                customer_stats[customer_name]["purchase_count"] += 1
+                customer_stats[customer_name]["total_spent"] += close_value
+
+        if not customer_stats:
+            return {"month": month, "top_customer": None}
+
+        top_customer = max(customer_stats, key=lambda customer: customer_stats[customer]["total_spent"])
+        return {
+            "month": month,
+            "top_customer": {
+                "customer_name": top_customer,
+                "purchase_count": customer_stats[top_customer]["purchase_count"],
+                "total_spent": round(customer_stats[top_customer]["total_spent"], 2)
+            }
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+
+@app.get("/sales-by-location/{month}")
+async def get_sales_by_location(month: int):
+    try:
+        data = load_data()
+        location_sales = defaultdict(float)
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                location = row.get("location", "Unknown")
+                close_value = float(row.get("close_value", 0))
+                location_sales[location] += close_value
+
+        result = [
+            {"location": location, "total_sales": round(sales, 2)}
+            for location, sales in sorted(location_sales.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        return {"month": month, "location_sales": result}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.get("/top-locations/{month}")
+async def get_top_locations_by_month(month: int):
+    try:
+        data = load_data()
+        location_sales = defaultdict(float)
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                location = row.get("location", "Unknown")
+                close_value = float(row.get("close_value", 0))
+                location_sales[location] += close_value
+
+        result = [
+            {"location": location, "total_sales": round(sales, 2)}
+            for location, sales in sorted(location_sales.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        return {"month": month, "top_locations": result}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.get("/sector-analysis/{month}/{parameter}")
+async def get_sector_analysis(month: int, parameter: str):
+    try:
+        valid_parameters = {"Conversion Rate", "Won Deals", "Lost Deals", "Total Opportunities", "Total Sales"}
+        if parameter not in valid_parameters:
+            raise HTTPException(status_code=400, detail=f"Invalid parameter. Choose from: {', '.join(valid_parameters)}")
+
+        data = load_data()
+        sector_analysis = defaultdict(lambda: {"Won Deals": 0, "Lost Deals": 0, "Total Opportunities": 0, "Total Sales": 0.0})
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                sector = row.get("sector", "Unknown")
+                deal_stage = row.get("deal_stage", "Unknown")
+                close_value = float(row.get("close_value", 0))
+
+                if deal_stage == "Won":
+                    sector_analysis[sector]["Won Deals"] += 1
+                    sector_analysis[sector]["Total Sales"] += close_value
+                elif deal_stage == "Lost":
+                    sector_analysis[sector]["Lost Deals"] += 1
+
+                sector_analysis[sector]["Total Opportunities"] += 1
+
+        if parameter == "Conversion Rate":
+            for sector, values in sector_analysis.items():
+                total_opportunities = values["Total Opportunities"]
+                won_deals = values["Won Deals"]
+                values["Conversion Rate"] = round((won_deals / total_opportunities) * 100, 2) if total_opportunities > 0 else 0.0
+
+        result = [
+            {"sector": sector, parameter: values.get(parameter, 0)}
+            for sector, values in sector_analysis.items()
+        ]
+
+        return {"month": month, "parameter": parameter, "sector_analysis": result}
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
