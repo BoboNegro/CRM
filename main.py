@@ -475,7 +475,7 @@ async def get_sales_by_month(month: int):
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
 
 
-@app.get("/top-agent/{month}")
+@app.get("/top-agent/sales/{month}")
 async def get_top_agent_by_month(month: int):
     try:
         data = load_data()
@@ -510,6 +510,62 @@ async def get_top_agent_by_month(month: int):
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
+@app.get("/top-agent/conv_rate/{month}")
+async def get_top_agent_inconversion_by_month(month: int):
+    try:
+        data = load_data()
+        agent_data = defaultdict(lambda: {"Won Deals": 0, "Total Opportunities": 0})
+
+        for row in data:
+            close_date = None
+            if "close_date" in row and row["close_date"]:
+                try:
+                    close_date = datetime.strptime(str(row["close_date"]), "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+            if close_date and close_date.month == month:
+                agent_name = row.get("sales_agent (from sales_agent)")
+                if isinstance(agent_name, list):
+                    agent_name = agent_name[0]
+
+                deal_stage = row.get("deal_stage")
+
+                if agent_name:
+                    agent_data[agent_name]["Total Opportunities"] += 1
+                    if deal_stage == "Won":
+                        agent_data[agent_name]["Won Deals"] += 1
+
+        if not agent_data:
+            return {"month": month, "top_agent": None}
+
+        top_agent = max(
+            agent_data.items(),
+            key=lambda item: (
+                (item[1]["Won Deals"] / item[1]["Total Opportunities"])
+                if item[1]["Total Opportunities"] > 0 else 0
+            )
+        )
+
+        conversion_rate = (
+            (top_agent[1]["Won Deals"] / top_agent[1]["Total Opportunities"] * 100)
+            if top_agent[1]["Total Opportunities"] > 0 else 0
+        )
+
+        return {
+            "month": month,
+            "top_agent": {
+                "agent_name": top_agent[0],
+                "conversion_rate": round(conversion_rate, 2),
+                "won_deals": top_agent[1]["Won Deals"],
+                "total_opportunities": top_agent[1]["Total Opportunities"]
+            }
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"message": f"An error occurred: {str(e)}"})
+
 
 @app.get("/top-product/{month}")
 async def get_top_product_by_month(month: int):
@@ -630,7 +686,7 @@ async def get_top_locations_by_month(month: int):
                     continue
 
             if close_date and close_date.month == month:
-                location = row.get("location", "Unknown")
+                location = row.get("office_location (from account)")
                 close_value = float(row.get("close_value", 0))
                 location_sales[location] += close_value
 
@@ -663,8 +719,8 @@ async def get_sector_analysis(month: int, parameter: str):
                     continue
 
             if close_date and close_date.month == month:
-                sector = row.get("sector", "Unknown")
-                deal_stage = row.get("deal_stage", "Unknown")
+                sector = row.get("sector (from account)")
+                deal_stage = row.get("deal_stage")
                 close_value = float(row.get("close_value", 0))
 
                 if deal_stage == "Won":
