@@ -7,7 +7,8 @@ import plotly.express as px
 st.set_page_config(
     page_title="Dashboard Agents",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # URL de base pour l'API
